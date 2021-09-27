@@ -8,8 +8,8 @@ use crate::error::Result;
 use crate::metadata::ColumnDescriptor;
 
 use crate::page::{
-    read_dict_page, CompressedDataPage, DataPageHeader, DictPage, PageType, ParquetPageHeader,
-    SerializedDictPage,
+    read_dict_page, CompressedDataPage, DataPageHeader, DictPage, EncodedDictPage, PageType,
+    ParquetPageHeader,
 };
 
 /// Type declaration for a page filter
@@ -172,7 +172,7 @@ pub(super) fn finish_page(
 
             // move the buffer to `dict_page`
             let mut dict_page =
-                SerializedDictPage::new(std::mem::take(buffer), dict_header.num_values as usize);
+                EncodedDictPage::new(std::mem::take(buffer), dict_header.num_values as usize);
 
             let page = read_dict_page(
                 &dict_page,

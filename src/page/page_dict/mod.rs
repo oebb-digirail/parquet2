@@ -21,12 +21,12 @@ pub trait DictPage: std::fmt::Debug + Send + Sync {
 
 /// A encoded and uncompressed dictionary page.
 #[derive(Debug)]
-pub struct SerializedDictPage {
+pub struct EncodedDictPage {
     pub(crate) buffer: Vec<u8>,
     pub(crate) num_values: usize,
 }
 
-impl SerializedDictPage {
+impl EncodedDictPage {
     pub fn new(buffer: Vec<u8>, num_values: usize) -> Self {
         Self { buffer, num_values }
     }
@@ -46,7 +46,7 @@ impl CompressedDictPage {
 }
 
 pub fn read_dict_page(
-    page: &SerializedDictPage,
+    page: &EncodedDictPage,
     compression: (Compression, usize),
     is_sorted: bool,
     physical_type: &PhysicalType,

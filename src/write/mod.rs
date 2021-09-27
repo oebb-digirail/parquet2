@@ -13,7 +13,7 @@ mod stream_stream;
 mod dyn_iter;
 pub use dyn_iter::{DynIter, DynStreamingIterator};
 
-pub use compression::compress;
+pub use compression::{compress, Compressor};
 
 pub use file::write_file;
 

@@ -190,12 +190,29 @@ pub enum Page {
     Dict(Arc<dyn DictPage>),
 }
 
+/// A [`EncodedPage`] is an uncompressed, encoded representation of a Parquet page. It may hold actual data
+/// and thus cloning it may be expensive.
+#[derive(Debug)]
+pub enum EncodedPage {
+    Data(DataPage),
+    Dict(EncodedDictPage),
+}
+
 /// A [`CompressedPage`] is a compressed, encoded representation of a Parquet page. It holds actual data
 /// and thus cloning it is expensive.
 #[derive(Debug)]
 pub enum CompressedPage {
     Data(CompressedDataPage),
     Dict(CompressedDictPage),
+}
+
+impl CompressedPage {
+    pub(crate) fn buffer(&mut self) -> &mut Vec<u8> {
+        match self {
+            CompressedPage::Data(page) => &mut page.buffer,
+            CompressedPage::Dict(page) => &mut page.buffer,
+        }
+    }
 }
 
 /// Splits the page buffer into 3 slices corresponding to (encoded rep levels, encoded def levels, encoded values) for v1 pages.
