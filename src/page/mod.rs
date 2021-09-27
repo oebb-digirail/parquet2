@@ -105,10 +105,10 @@ impl DataPageHeader {
 /// and thus cloning it is expensive.
 #[derive(Debug, Clone)]
 pub struct DataPage {
-    header: DataPageHeader,
+    pub(super) header: DataPageHeader,
     pub(super) buffer: Vec<u8>,
-    dictionary_page: Option<Arc<dyn DictPage>>,
-    descriptor: ColumnDescriptor,
+    pub(super) dictionary_page: Option<Arc<dyn DictPage>>,
+    pub(super) descriptor: ColumnDescriptor,
 }
 
 impl DataPage {
