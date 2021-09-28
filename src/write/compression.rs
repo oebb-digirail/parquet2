@@ -7,8 +7,6 @@ use crate::{
     page::{CompressedDataPage, DataPage, EncodedPage},
 };
 
-use super::DynIter;
-
 /// Compresses a [`DataPage`] into a [`CompressedDataPage`].
 fn compress_data(
     page: DataPage,
@@ -84,19 +82,15 @@ pub fn compress(
 
 /// A [`FallibleStreamingIterator`] that consumes [`EncodedPage`] and yields [`CompressedPage`]
 /// holding a reusable buffer ([`Vec<u8>`]) for compression.
-pub struct Compressor<'a> {
-    iter: DynIter<'a, Result<EncodedPage>>,
+pub struct Compressor<'a, I: Iterator<Item = Result<EncodedPage>>> {
+    iter: I,
     compression: Compression,
-    buffer: Vec<u8>,
+    buffer: &'a mut Vec<u8>,
     current: Option<CompressedPage>,
 }
 
-impl<'a> Compressor<'a> {
-    pub fn new(
-        iter: DynIter<'a, Result<EncodedPage>>,
-        compression: Compression,
-        buffer: Vec<u8>,
-    ) -> Self {
+impl<'a, I: Iterator<Item = Result<EncodedPage>>> Compressor<'a, I> {
+    pub fn new(iter: I, compression: Compression, buffer: &'a mut Vec<u8>) -> Self {
         Self {
             iter,
             compression,
@@ -104,13 +98,9 @@ impl<'a> Compressor<'a> {
             current: None,
         }
     }
-
-    pub fn buffer(&mut self) -> &mut Vec<u8> {
-        &mut self.buffer
-    }
 }
 
-impl<'a> FallibleStreamingIterator for Compressor<'a> {
+impl<'a, I: Iterator<Item = Result<EncodedPage>>> FallibleStreamingIterator for Compressor<'a, I> {
     type Item = CompressedPage;
     type Error = ParquetError;
 
@@ -118,7 +108,7 @@ impl<'a> FallibleStreamingIterator for Compressor<'a> {
         let mut compressed_buffer = if let Some(page) = self.current.as_mut() {
             std::mem::take(page.buffer())
         } else {
-            std::mem::take(&mut self.buffer)
+            std::mem::take(self.buffer)
         };
         compressed_buffer.clear();
 
