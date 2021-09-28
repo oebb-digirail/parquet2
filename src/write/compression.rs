@@ -64,7 +64,7 @@ fn compress_dict(
     } else {
         std::mem::swap(&mut buffer, &mut compressed_buffer);
     }
-    Ok(CompressedDictPage::new(buffer, num_values))
+    Ok(CompressedDictPage::new(compressed_buffer, num_values))
 }
 
 pub fn compress(
@@ -115,16 +115,17 @@ impl<'a> FallibleStreamingIterator for Compressor<'a> {
     type Error = ParquetError;
 
     fn advance(&mut self) -> std::result::Result<(), Self::Error> {
-        let buffer = if let Some(page) = self.current.as_mut() {
+        let mut compressed_buffer = if let Some(page) = self.current.as_mut() {
             std::mem::take(page.buffer())
         } else {
             std::mem::take(&mut self.buffer)
         };
+        compressed_buffer.clear();
 
         let next = self
             .iter
             .next()
-            .map(|x| x.and_then(|page| compress(page, buffer, self.compression)))
+            .map(|x| x.and_then(|page| compress(page, compressed_buffer, self.compression)))
             .transpose()?;
         self.current = next;
         Ok(())
