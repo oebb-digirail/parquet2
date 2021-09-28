@@ -1,3 +1,7 @@
+use std::cell::RefCell;
+use std::ops::DerefMut;
+use std::rc::Rc;
+
 use crate::error::{ParquetError, Result};
 use crate::page::{CompressedDictPage, CompressedPage, DataPageHeader, EncodedDictPage};
 use crate::parquet_bridge::Compression;
@@ -82,15 +86,19 @@ pub fn compress(
 
 /// A [`FallibleStreamingIterator`] that consumes [`EncodedPage`] and yields [`CompressedPage`]
 /// holding a reusable buffer ([`Vec<u8>`]) for compression.
-pub struct Compressor<'a, I: Iterator<Item = Result<EncodedPage>>> {
+pub struct Compressor<I: Iterator<Item = Result<EncodedPage>>> {
     iter: I,
     compression: Compression,
-    buffer: &'a mut Vec<u8>,
+    buffer: Rc<RefCell<Vec<u8>>>,
     current: Option<CompressedPage>,
 }
 
-impl<'a, I: Iterator<Item = Result<EncodedPage>>> Compressor<'a, I> {
-    pub fn new(iter: I, compression: Compression, buffer: &'a mut Vec<u8>) -> Self {
+impl<I: Iterator<Item = Result<EncodedPage>>> Compressor<I> {
+    pub fn new_from_vec(iter: I, compression: Compression, buffer: Vec<u8>) -> Self {
+        Self::new(iter, compression, Rc::new(RefCell::new(buffer)))
+    }
+
+    pub fn new(iter: I, compression: Compression, buffer: Rc<RefCell<Vec<u8>>>) -> Self {
         Self {
             iter,
             compression,
@@ -100,7 +108,7 @@ impl<'a, I: Iterator<Item = Result<EncodedPage>>> Compressor<'a, I> {
     }
 }
 
-impl<'a, I: Iterator<Item = Result<EncodedPage>>> FallibleStreamingIterator for Compressor<'a, I> {
+impl<I: Iterator<Item = Result<EncodedPage>>> FallibleStreamingIterator for Compressor<I> {
     type Item = CompressedPage;
     type Error = ParquetError;
 
@@ -108,7 +116,7 @@ impl<'a, I: Iterator<Item = Result<EncodedPage>>> FallibleStreamingIterator for 
         let mut compressed_buffer = if let Some(page) = self.current.as_mut() {
             std::mem::take(page.buffer())
         } else {
-            std::mem::take(self.buffer)
+            std::mem::take(self.buffer.borrow_mut().deref_mut())
         };
         compressed_buffer.clear();
 
