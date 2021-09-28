@@ -1,4 +1,4 @@
-use streaming_iterator::StreamingIterator;
+use crate::FallibleStreamingIterator;
 
 /// [`DynIter`] is an implementation of a single-threaded, dynamically-typed iterator.
 pub struct DynIter<'a, V> {
@@ -27,14 +27,16 @@ impl<'a, V> DynIter<'a, V> {
     }
 }
 
-/// Dynamically-typed [`StreamingIterator`].
-pub struct DynStreamingIterator<'a, V> {
-    iter: Box<dyn StreamingIterator<Item = V> + 'a>,
+/// Dynamically-typed [`FallibleStreamingIterator`].
+pub struct DynStreamingIterator<'a, V, E> {
+    iter: Box<dyn FallibleStreamingIterator<Item = V, Error = E> + 'a>,
 }
 
-impl<'a, V> StreamingIterator for DynStreamingIterator<'a, V> {
+impl<'a, V, E> FallibleStreamingIterator for DynStreamingIterator<'a, V, E> {
     type Item = V;
-    fn advance(&mut self) {
+    type Error = E;
+
+    fn advance(&mut self) -> Result<(), Self::Error> {
         self.iter.advance()
     }
 
@@ -47,10 +49,10 @@ impl<'a, V> StreamingIterator for DynStreamingIterator<'a, V> {
     }
 }
 
-impl<'a, V> DynStreamingIterator<'a, V> {
+impl<'a, V, E> DynStreamingIterator<'a, V, E> {
     pub fn new<I>(iter: I) -> Self
     where
-        I: StreamingIterator<Item = V> + 'a,
+        I: FallibleStreamingIterator<Item = V, Error = E> + 'a,
     {
         Self {
             iter: Box::new(iter),

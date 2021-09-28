@@ -1,8 +1,7 @@
-use streaming_iterator::StreamingIterator;
-
-use crate::error::Result;
+use crate::error::{ParquetError, Result};
 use crate::page::{CompressedDictPage, CompressedPage, DataPageHeader, EncodedDictPage};
 use crate::parquet_bridge::Compression;
+use crate::FallibleStreamingIterator;
 use crate::{
     compression::create_codec,
     page::{CompressedDataPage, DataPage, EncodedPage},
@@ -83,13 +82,13 @@ pub fn compress(
     }
 }
 
-/// A [`StreamingIterator`] that consumes [`EncodedPage`] and yields [`CompressedPage`]
+/// A [`FallibleStreamingIterator`] that consumes [`EncodedPage`] and yields [`CompressedPage`]
 /// holding a reusable buffer ([`Vec<u8>`]) for compression.
 pub struct Compressor<'a> {
     iter: DynIter<'a, Result<EncodedPage>>,
     compression: Compression,
     buffer: Vec<u8>,
-    current: Option<Result<CompressedPage>>,
+    current: Option<CompressedPage>,
 }
 
 impl<'a> Compressor<'a> {
@@ -111,11 +110,12 @@ impl<'a> Compressor<'a> {
     }
 }
 
-impl<'a> StreamingIterator for Compressor<'a> {
-    type Item = Result<CompressedPage>;
+impl<'a> FallibleStreamingIterator for Compressor<'a> {
+    type Item = CompressedPage;
+    type Error = ParquetError;
 
-    fn advance(&mut self) {
-        let buffer = if let Some(Ok(page)) = self.current.as_mut() {
+    fn advance(&mut self) -> std::result::Result<(), Self::Error> {
+        let buffer = if let Some(page) = self.current.as_mut() {
             std::mem::take(page.buffer())
         } else {
             std::mem::take(&mut self.buffer)
@@ -124,8 +124,10 @@ impl<'a> StreamingIterator for Compressor<'a> {
         let next = self
             .iter
             .next()
-            .map(|x| x.and_then(|page| compress(page, buffer, self.compression)));
+            .map(|x| x.and_then(|page| compress(page, buffer, self.compression)))
+            .transpose()?;
         self.current = next;
+        Ok(())
     }
 
     fn get(&self) -> Option<&Self::Item> {

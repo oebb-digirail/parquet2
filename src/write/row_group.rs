@@ -36,10 +36,7 @@ pub fn write_row_group<
     mut offset: u64,
     descriptors: &[ColumnDescriptor],
     compression: Compression,
-    columns: DynIter<
-        'a,
-        std::result::Result<DynStreamingIterator<'a, std::result::Result<CompressedPage, E>>, E>,
-    >,
+    columns: DynIter<'a, std::result::Result<DynStreamingIterator<'a, CompressedPage, E>, E>>,
 ) -> Result<(RowGroup, u64)>
 where
     W: Write,
@@ -98,10 +95,7 @@ pub async fn write_row_group_async<
     mut offset: u64,
     descriptors: &[ColumnDescriptor],
     compression: Compression,
-    columns: DynIter<
-        'a,
-        std::result::Result<DynStreamingIterator<'a, std::result::Result<CompressedPage, E>>, E>,
-    >,
+    columns: DynIter<'a, std::result::Result<DynStreamingIterator<'a, CompressedPage, E>, E>>,
 ) -> Result<(RowGroup, u64)>
 where
     W: AsyncWrite + Unpin + Send,

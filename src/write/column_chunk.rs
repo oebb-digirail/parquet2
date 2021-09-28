@@ -7,9 +7,9 @@ use parquet_format_async_temp::thrift::protocol::{
     TCompactOutputProtocol, TCompactOutputStreamProtocol, TOutputProtocol, TOutputStreamProtocol,
 };
 use parquet_format_async_temp::{ColumnChunk, ColumnMetaData};
-use streaming_iterator::StreamingIterator;
 
 use crate::statistics::serialize_statistics;
+use crate::FallibleStreamingIterator;
 use crate::{
     compression::Compression,
     encoding::Encoding,
@@ -28,10 +28,11 @@ pub fn write_column_chunk<'a, W, E>(
     mut offset: u64,
     descriptor: &ColumnDescriptor,
     compression: Compression,
-    mut compressed_pages: DynStreamingIterator<'a, std::result::Result<CompressedPage, E>>,
+    mut compressed_pages: DynStreamingIterator<'a, CompressedPage, E>,
 ) -> Result<(ColumnChunk, u64)>
 where
     W: Write,
+    ParquetError: From<E>,
     E: std::error::Error,
 {
     // write every page
@@ -39,14 +40,8 @@ where
     let initial = offset;
 
     let mut specs = vec![];
-    while let Some(compressed_page) = compressed_pages.next() {
-        let spec = write_page(
-            writer,
-            offset,
-            compressed_page
-                .as_ref()
-                .map_err(|x| ParquetError::General(x.to_string()))?,
-        )?;
+    while let Some(compressed_page) = compressed_pages.next()? {
+        let spec = write_page(writer, offset, compressed_page)?;
         offset += spec.bytes_written;
         specs.push(spec);
     }
@@ -67,24 +62,18 @@ pub async fn write_column_chunk_async<W, E>(
     mut offset: u64,
     descriptor: &ColumnDescriptor,
     compression: Compression,
-    mut compressed_pages: DynStreamingIterator<'_, std::result::Result<CompressedPage, E>>,
+    mut compressed_pages: DynStreamingIterator<'_, CompressedPage, E>,
 ) -> Result<(ColumnChunk, usize)>
 where
     W: AsyncWrite + Unpin + Send,
+    ParquetError: From<E>,
     E: std::error::Error,
 {
     let initial = offset;
     // write every page
     let mut specs = vec![];
-    while let Some(compressed_page) = compressed_pages.next() {
-        let spec = write_page_async(
-            writer,
-            offset,
-            compressed_page
-                .as_ref()
-                .map_err(|x| ParquetError::General(x.to_string()))?,
-        )
-        .await?;
+    while let Some(compressed_page) = compressed_pages.next()? {
+        let spec = write_page_async(writer, offset, compressed_page).await?;
         offset += spec.bytes_written;
         specs.push(spec);
     }
