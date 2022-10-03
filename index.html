@@ -154,8 +154,13 @@ metadata (at the end of the file).
 To do so, we offer two functions for <code>sync</code> and <code>async</code>:</p>
 <h4 id="sync"><a class="header" href="#sync">Sync</a></h4>
 <p><code>parquet2::read::read_metadata</code> for <code>sync</code> reads:</p>
-<pre><code class="language-rust no_run noplayground">    use parquet2::read::read_metadata;
-    let mut reader = std::fs::File::open(&quot;path&quot;)?;
+<pre><code class="language-rust no_run noplayground">    use std::env;
+    let args: Vec&lt;String&gt; = env::args().collect();
+
+    let path = &amp;args[1];
+
+    use parquet2::read::read_metadata;
+    let mut reader = std::fs::File::open(path)?;
     let metadata = read_metadata(&amp;mut reader)?;
 
     println!(&quot;{:#?}&quot;, metadata);
@@ -195,57 +200,64 @@ Here we will focus on a single column to show how we can read it.</p>
 <p>We access the metadata of a column chunk via</p>
 <pre><code class="language-rust no_run noplayground">    let row_group = 0;
     let column = 0;
-    let column_metadata = metadata.row_groups[row_group].column(column);
+    let columns = metadata.row_groups[row_group].columns();
+    let column_metadata = &amp;columns[column];
 </code></pre>
 <p>From this, we can produce an iterator of compressed pages (sync), 
 <code>parquet2::read::get_page_iterator</code> or a stream (async) of compressed
 pages, <code>parquet2::read::get_page_stream</code>:</p>
 <pre><code class="language-rust no_run noplayground">    use parquet2::read::get_page_iterator;
-    let pages = get_page_iterator(column_metadata, &amp;mut reader, None, vec![])?;
+    let pages = get_page_iterator(column_metadata, &amp;mut reader, None, vec![], 1024 * 1024)?;
 </code></pre>
 <p>in both cases, they yield individual <code>CompressedDataPage</code>s. Note that these
 pages do hold values and own potentially large chunks of (compressed) memory.</p>
 <p>At this point, we are missing 3 steps: decompress, decode and deserialize.
 Decompression is done via <code>decompress</code>:</p>
 <pre><code class="language-rust no_run noplayground">    let mut decompress_buffer = vec![];
+    let mut dict = None;
     for maybe_page in pages {
         let page = maybe_page?;
         let page = parquet2::read::decompress(page, &amp;mut decompress_buffer)?;
 
-        let _array = deserialize(&amp;page, column_metadata.descriptor());
+        match page {
+            Page::Dict(page) =&gt; {
+                // the first page may be a dictionary page, which needs to be deserialized
+                // depending on your target in-memory format, you may want to deserialize
+                // the values differently...
+                // let page = deserialize_dict(&amp;page)?;
+                dict = Some(page);
+            }
+            Page::Data(page) =&gt; {
+                let _array = deserialize(&amp;page, dict.as_ref())?;
+            }
+        }
     }
 </code></pre>
 <p>Decoding and deserialization is usually done in the same step, as follows:</p>
 <pre><code class="language-rust no_run noplayground">use parquet2::encoding::Encoding;
-use parquet2::metadata::ColumnDescriptor;
-use parquet2::page::{split_buffer, DataPage};
-use parquet2::schema::types::ParquetType;
+use parquet2::page::{split_buffer, DataPage, DictPage, Page};
+use parquet2::schema::types::PhysicalType;
 
-fn deserialize(page: &amp;DataPage, descriptor: &amp;ColumnDescriptor) {
-    let (_rep_levels, _def_levels, _values_buffer) = split_buffer(page, descriptor);
+fn deserialize(page: &amp;DataPage, dict: Option&lt;&amp;DictPage&gt;) -&gt; Result&lt;()&gt; {
+    // split the data buffer in repetition levels, definition levels and values
+    let (_rep_levels, _def_levels, _values_buffer) = split_buffer(page)?;
 
-    if let ParquetType::PrimitiveType {
-        physical_type,
-        converted_type,
-        logical_type,
-        ..
-    } = descriptor.type_()
-    {
-        // map the types to your physical typing system (e.g. this usually adds
-        // casting, tz conversions, int96 to timestamp)
-    } else {
-        // column chunks are always primitive types
-        unreachable!()
-    }
-
-    // finally, decode and deserialize.
-    match (&amp;page.encoding(), page.dictionary_page()) {
-        (Encoding::PlainDictionary | Encoding::RleDictionary, Some(_dict_page)) =&gt; {
+    // decode and deserialize.
+    match (
+        page.descriptor.primitive_type.physical_type,
+        page.encoding(),
+        dict,
+    ) {
+        (
+            PhysicalType::Int32,
+            Encoding::PlainDictionary | Encoding::RleDictionary,
+            Some(_dict_page),
+        ) =&gt; {
             // plain encoded page with a dictionary
             // _dict_page can be downcasted based on the descriptor's physical type
             todo!()
         }
-        (Encoding::Plain, None) =&gt; {
+        (PhysicalType::Int32, Encoding::Plain, None) =&gt; {
             // plain encoded page
             todo!()
         }
@@ -271,7 +283,6 @@ are represented via trait objects of the trait <code>Statistics</code>,
 which can be downcasted via its <code>Statistics::physical_type()</code>:</p>
 <pre><code class="language-rust no_run noplayground">    if let Some(maybe_stats) = column_metadata.statistics() {
         let stats = maybe_stats?;
-        use parquet2::schema::types::PhysicalType;
         use parquet2::statistics::PrimitiveStatistics;
         match stats.physical_type() {
             PhysicalType::Int32 =&gt; {
@@ -283,10 +294,124 @@ which can be downcasted via its <code>Statistics::physical_type()</code>:</p>
                 let _max: i32 = stats.max_value.unwrap();
                 let _null_count: i64 = stats.null_count.unwrap();
             }
+            PhysicalType::Int64 =&gt; {
+                let stats = stats
+                    .as_any()
+                    .downcast_ref::&lt;PrimitiveStatistics&lt;i64&gt;&gt;()
+                    .unwrap();
+                let _min: i64 = stats.min_value.unwrap();
+                let _max: i64 = stats.max_value.unwrap();
+                let _null_count: i64 = stats.null_count.unwrap();
+            }
             _ =&gt; todo!(),
         }
     }
 </code></pre>
+<h2 id="bloom-filters"><a class="header" href="#bloom-filters">Bloom filters</a></h2>
+<p>The column metadata may contain bloom filter bitsets that can be used to pushdown
+filter operations to row groups.</p>
+<p>This crate offers the necessary functionality to check whether an item is not in a column chunk:</p>
+<pre><code class="language-rust no_run noplayground">    let mut bitset = vec![];
+    bloom_filter::read(column_metadata, &amp;mut reader, &amp;mut bitset)?;
+    if !bitset.is_empty() {
+        // there is a bitset, we can use it to check if elements are in the column chunk
+
+        // assume that our query engine had resulted in the filter `&quot;column 0&quot; == 100i64` (it also verified that column 0 is i64 in parquet)
+        let value = 100i64;
+
+        // we hash this value
+        let hash = bloom_filter::hash_native(value);
+
+        // and check if the hash is in the bitset.
+        let _in_set = bloom_filter::is_in_set(&amp;bitset, hash);
+        // if not (false), we could skip this entire row group, because no item hits the filter
+        // this can naturally be applied over multiple columns.
+        // if yes (true), the item _may_ be in the row group, and we usually can't skip it.
+    }
+</code></pre>
+<h2 id="column-and-page-indexes"><a class="header" href="#column-and-page-indexes">Column and page indexes</a></h2>
+<p>The column metadata may contain column and page indexes that can be used to push down filters
+when reading (IO) pages.</p>
+<p>This crate offers the necessary functionality to check whether an item is not in a column chunk:</p>
+<pre><code class="language-rust no_run noplayground">    // read the column indexes of every column
+    use parquet2::read;
+    let index = read::read_columns_indexes(&amp;mut reader, columns)?;
+    // these are the minimum and maximum within each page, which can be used
+    // to skip pages.
+    println!(&quot;{index:?}&quot;);
+
+    // read the offset indexes containing page locations of every column
+    let pages = read::read_pages_locations(&amp;mut reader, columns)?;
+    println!(&quot;{pages:?}&quot;);
+</code></pre>
+<h2 id="sidecar"><a class="header" href="#sidecar">Sidecar</a></h2>
+<p>When writing multiple parquet files, it is common to have a &quot;sidecar&quot; metadata file containing
+the combined metadata of all files, including statistics.</p>
+<p>This crate supports this use-case, as shown in the example below:</p>
+<pre><pre class="playground"><code class="language-rust">use parquet2::{
+    error::Error,
+    metadata::SchemaDescriptor,
+    schema::types::{ParquetType, PhysicalType},
+    write::{write_metadata_sidecar, FileWriter, Version, WriteOptions},
+};
+
+fn main() -&gt; Result&lt;(), Error&gt; {
+    // say we have 10 files with the same schema:
+    let schema = SchemaDescriptor::new(
+        &quot;schema&quot;.to_string(),
+        vec![ParquetType::from_physical(
+            &quot;c1&quot;.to_string(),
+            PhysicalType::Int32,
+        )],
+    );
+
+    // we can collect their metadata after they are written
+    let mut metadatas = vec![];
+    for i in 0..10 {
+        let relative_path = format!(&quot;part-{i}.parquet&quot;);
+        let writer = std::io::Cursor::new(vec![]);
+        let mut writer = FileWriter::new(
+            writer,
+            schema.clone(),
+            WriteOptions {
+                write_statistics: true,
+                version: Version::V2,
+            },
+            None,
+        );
+
+        // we write row groups to it
+        // writer.write(row_group)
+
+        // and the footer
+        writer.end(None)?;
+        let (_, mut metadata) = writer.into_inner_and_metadata();
+
+        // once done, we write the relative path to the column chunks
+        metadata.row_groups.iter_mut().for_each(|row_group| {
+            row_group
+                .columns
+                .iter_mut()
+                .for_each(|column| column.file_path = Some(relative_path.clone()))
+        });
+        // and collect the metadata
+        metadatas.push(metadata);
+    }
+
+    // we can then merge their row groups
+    let first = metadatas.pop().unwrap();
+    let sidecar = metadatas.into_iter().fold(first, |mut acc, metadata| {
+        acc.row_groups.extend(metadata.row_groups.into_iter());
+        acc
+    });
+
+    // and write the metadata on a separate file
+    let mut writer = std::io::Cursor::new(vec![]);
+    write_metadata_sidecar(&amp;mut writer, &amp;sidecar)?;
+
+    Ok(())
+}
+</code></pre></pre>
 
                     </main>
 
